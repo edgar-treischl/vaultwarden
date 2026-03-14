@@ -43,6 +43,8 @@ A structured guide for testing secrets management locally, integrating with GitL
 - [ ] `export VAULT_ADDR='http://127.0.0.1:8200'`
 - [ ] Open `http://localhost:8200/ui` — Vault will show "not initialized"
 - [ ] Run `scripts/bootstrap-vault.sh` — this initializes, unseals, and seeds secrets in one step
+`chmod +x scripts/bootstrap-vault.sh`
+`./scripts/bootstrap-vault.sh`
 - [ ] **Save the printed Unseal Key and Root Token** — they are only shown once
 - [ ] `export VAULT_TOKEN=<root_token>` and run `vault status`
 
