@@ -1,2 +1,3 @@
 .env
 pw.txt
+docker/vault/vault-data

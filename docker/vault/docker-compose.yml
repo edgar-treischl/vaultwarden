@@ -9,5 +9,5 @@ services:
       - IPC_LOCK
     volumes:
       - ./vault-config.hcl:/vault/config/vault.hcl
-      - ./vault-data:/vault/data
+      - ./vault-data:/vault/file
     command: server

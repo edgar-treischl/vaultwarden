@@ -1,75 +1,68 @@
 #!/usr/bin/env bash
 set -e
 
-# ----------------------------
-# CONFIG
-# ----------------------------
-# Vault address (HTTP)
 export VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
+INIT_FILE="vault-init.json"
 
-# Path to jq for JSON parsing (ensure installed)
-if ! command -v jq &>/dev/null; then
-    echo "ERROR: 'jq' is required. Install it (brew install jq or apt install jq)."
-    exit 1
-fi
+# Wait for Vault to be reachable
+echo "Waiting for Vault..."
+until curl -s "$VAULT_ADDR/v1/sys/health" >/dev/null; do
+  sleep 1
+done
 
-# ----------------------------
-# CHECK VAULT STATUS
-# ----------------------------
 INIT_STATUS=$(curl -s "$VAULT_ADDR/v1/sys/health" | jq -r '.initialized')
+SEALED_STATUS=$(curl -s "$VAULT_ADDR/v1/sys/health" | jq -r '.sealed')
 
+# ----------------------------
+# INIT (only once)
+# ----------------------------
 if [ "$INIT_STATUS" == "false" ]; then
-    echo "Initializing Vault at $VAULT_ADDR ..."
+  echo "Initializing Vault..."
 
-    INIT_JSON=$(vault operator init -key-shares=1 -key-threshold=1 -format=json)
+  vault operator init -key-shares=1 -key-threshold=1 -format=json > "$INIT_FILE"
+  chmod 600 "$INIT_FILE"
 
-    UNSEAL_KEY=$(echo "$INIT_JSON" | jq -r '.unseal_keys_b64[0]')
-    ROOT_TOKEN=$(echo "$INIT_JSON" | jq -r '.root_token')
-
-    echo ""
-    echo "==> SAVE THESE CREDENTIALS SECURELY <=="
-    echo "Unseal Key : $UNSEAL_KEY"
-    echo "Root Token : $ROOT_TOKEN"
-    echo "======================================="
-    echo ""
-
-    # Unseal Vault
-    vault operator unseal "$UNSEAL_KEY"
-
-    # Export token for current shell (if sourced)
-    export VAULT_TOKEN="$ROOT_TOKEN"
-
-elif [ "$INIT_STATUS" == "true" ]; then
-    echo "Vault already initialized."
-
-    # Check if VAULT_TOKEN is set
-    if [ -z "$VAULT_TOKEN" ]; then
-        echo "WARNING: VAULT_TOKEN is not set. You need a valid token to run this script."
-        echo "Set your root token manually: export VAULT_TOKEN=<your-root-token>"
-        exit 1
-    fi
-
-    # Check if Vault is sealed
-    SEALED_STATUS=$(curl -s "$VAULT_ADDR/v1/sys/health" | jq -r '.sealed')
-    if [ "$SEALED_STATUS" == "true" ]; then
-        echo "Vault is sealed. You must unseal it before proceeding."
-        exit 1
-    fi
+  echo "Saved init data to $INIT_FILE"
 fi
 
 # ----------------------------
-# ENABLE KV v2 ENGINE
+# LOAD KEYS
 # ----------------------------
-vault secrets enable -version=2 -path=secret kv 2>/dev/null || echo "KV secret engine already enabled"
+if [ ! -f "$INIT_FILE" ]; then
+  echo "ERROR: $INIT_FILE not found."
+  exit 1
+fi
+
+UNSEAL_KEY=$(jq -r '.unseal_keys_b64[0]' "$INIT_FILE")
+ROOT_TOKEN=$(jq -r '.root_token' "$INIT_FILE")
+
+export VAULT_TOKEN="$ROOT_TOKEN"
 
 # ----------------------------
-# SEED INITIAL SECRETS
+# UNSEAL (every restart)
+# ----------------------------
+if [ "$SEALED_STATUS" == "true" ]; then
+  echo "Unsealing Vault..."
+  vault operator unseal "$UNSEAL_KEY"
+fi
+
+# ----------------------------
+# ENABLE KV (idempotent)
+# ----------------------------
+vault secrets enable -version=2 -path=secret kv 2>/dev/null || true
+
+# ----------------------------
+# SEED DATA (idempotent-ish)
 # ----------------------------
 vault kv put secret/pyreporter \
   username="ci_user" \
   password="ci_password" \
-  api_url="https://api.example.com"
+  api_url="https://api.example.com" >/dev/null
 
 echo ""
-echo "Bootstrap complete. Verify with:"
+echo "✅ Vault ready"
+echo "VAULT_ADDR=$VAULT_ADDR"
+echo "VAULT_TOKEN=$ROOT_TOKEN"
+echo ""
+echo "Test:"
 echo "vault kv get secret/pyreporter"
